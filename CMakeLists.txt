@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 2.8.12)
 project(phoxi_camera)
 
+set(PhoXi_DIR /opt/PhotoneoPhoXiControl)
+
 find_package(PhoXi REQUIRED CONFIG PATHS "$ENV{PHOXI_CONTROL_PATH}")
 
 find_package(catkin REQUIRED
@@ -69,7 +71,7 @@ add_executable(
 
 add_dependencies(
   ${PROJECT_NAME}
-  ${PROJECT_NAME}_gencfgv
+  ${PROJECT_NAME}_gencfg
   ${${PROJECT_NAME}_EXPORTED_TARGETS}
   ${catkin_EXPORTED_TARGETS}
 )

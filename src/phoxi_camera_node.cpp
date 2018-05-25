@@ -66,7 +66,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 pho::api::PPhoXi EvaluationScanner;
 pho::api::PhoXiFactory Factory;
-ros::Publisher pub_cloud, pub_normal_map, pub_confidence_map, pub_texture;
+ros::Publisher pub_cloud, pub_normal_map, pub_confidence_map, pub_texture, pub_depth_map;
 pho::api::PFrame CurrentFrame;
 
 void init_config(pho::api::PPhoXi &Scanner) {
@@ -247,12 +247,12 @@ void publish_frame(pho::api::PFrame MyFrame){
         //MyFrame->ConvertTo(MyPCLCloud2);
         //pcl::PLYWriter Writer;
         //Writer.writeBinary("Test Software PCL" + std::to_string(k) + " , " + std::to_string(i) + ".ply", MyPCLCloud2);
-        pcl::PointCloud <pcl::PointXYZ> cloud;
-        sensor_msgs::Image texture, confidence_map, normal_map;
+        pcl::PointCloud <pcl::PointXYZRGB> cloud;
+        sensor_msgs::Image texture, confidence_map, normal_map, depth_image;
         ros::Time       timeNow         = ros::Time::now();
         std::string     frame           = "camera";
 
-        texture.header.stamp          = timeNow;
+        texture.header.stamp          = ros::Time(MyFrame->Info.FrameTimestamp);
         texture.header.frame_id       = frame;
 
         confidence_map.header.stamp         = timeNow;
@@ -260,6 +260,9 @@ void publish_frame(pho::api::PFrame MyFrame){
 
         normal_map.header.stamp          = timeNow;
         normal_map.header.frame_id       = frame;
+
+        depth_image.header.stamp = timeNow;
+        depth_image.header.frame_id = frame;
 
         texture.encoding = "32FC1";
         sensor_msgs::fillImage( texture,
@@ -282,22 +285,67 @@ void publish_frame(pho::api::PFrame MyFrame){
                                 MyFrame->NormalMap.Size.Width, // width
                                 MyFrame->NormalMap.Size.Width * sizeof(float) * 3, // stepSize
                                 MyFrame->NormalMap.operator[](0));
+            depth_image.encoding = "32FC1";
+            sensor_msgs::fillImage( depth_image,
+                                    sensor_msgs::image_encodings::TYPE_32FC1,
+                                    MyFrame->DepthMap.Size.Height, // height
+                                    MyFrame->DepthMap.Size.Width, // width
+                                    MyFrame->DepthMap.Size.Width * sizeof(float), // stepSize
+                                    MyFrame->DepthMap.operator[](0));
         int h = MyFrame->PointCloud.Size.Height;
         int w = MyFrame->PointCloud.Size.Width;
+
+        //cloud.resize(h*w);
+        cloud.width = w;
+        cloud.height = h;
+        cloud.resize(h*w);
+
+        double max = 0;
+        double mean = 0;
+        for (int i = 0; i < h; ++i) {
+            for (int j = 0; j < w; ++j) {
+              mean += MyFrame->Texture.At(i, j);
+              if (MyFrame->Texture.At(i, j) > max)
+                max = MyFrame->Texture.At(i, j);
+          }
+        }
+        mean /= (h*w);
+        std::cout << "max intensity value: " << max << "\n";
+        std::cout << "mean intensity value: " << mean << "\n";
+        if(max > mean * 5.0)
+        {
+          //max /= 3.0;
+          max = mean * 2.0;
+        }
+#pragma omp parallel for
         for (int i = 0; i < h; ++i) {
             for (int j = 0; j < w; ++j) {
                 auto &point = MyFrame->PointCloud.At(i, j);
-                cloud.push_back(pcl::PointXYZ(point.x * 0.001f, point.y * 0.001f, point.z * 0.001f));
+                auto &intensity = MyFrame->Texture.At(i, j);
+                pcl::PointXYZRGB* pt = &cloud.at(j,i);
+                pt->x = point.x * 0.001f;
+                pt->y = point.y * 0.001f;
+                pt->z = point.z * 0.001f;
+                double val = (intensity * 128.0 / mean) / max * 255.0 ;
+                val = val > 255 ? 255 : val;
+                val = val < 0 ? 0 : val;
+                pt->r = pt->g = pt->b = val;
+                //cloud.at(j,i) = pcl::PointXYZI(point.x * 0.001f, point.y * 0.001f, point.z * 0.001f);
+                // cloud.push_back(pcl::PointXYZ(point.x * 0.001f, point.y * 0.001f, point.z * 0.001f));
                 // cloud.push_back (pcl::PointXYZ (i, j, i+j));
             }
         }
+        //pho::api::pcls::FillPointCloudI(MyFrame->Texture, cloud);
+
         std::cout << "publishing data" << std::endl;
         sensor_msgs::PointCloud2 output_cloud;
         pcl::toROSMsg(cloud, output_cloud);
-        output_cloud.header.frame_id = "map";
+        output_cloud.header.frame_id = "camera_ir_optical_frame";
+        output_cloud.header.stamp = timeNow;
         pub_cloud.publish(output_cloud);
         pub_normal_map.publish(normal_map);
         pub_confidence_map.publish(confidence_map);
+        pub_depth_map.publish(depth_image);
         pub_texture.publish(texture);
     }
 }
@@ -372,6 +420,7 @@ int main(int argc, char **argv) {
     pub_cloud = nh.advertise < pcl::PointCloud < pcl::PointXYZ >> ("pointcloud", 1);
     pub_normal_map = nh.advertise < sensor_msgs::Image > ("normal_map", 1);
     pub_confidence_map = nh.advertise < sensor_msgs::Image > ("confidence_map", 1);
+    pub_depth_map = nh.advertise < sensor_msgs::Image > ("depth_map", 1);
     pub_texture = nh.advertise < sensor_msgs::Image > ("texture", 1);
 
     std::cout << "Ready!" << std::endl;
